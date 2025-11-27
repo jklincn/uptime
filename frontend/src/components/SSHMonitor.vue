@@ -213,7 +213,7 @@ onMounted(() => {
         <div class="col">服务器名称</div>
         <div class="col">IP 地址</div>
         <div class="col">电源状态</div>
-        <div class="col">网络状态</div>
+        <div class="col">远程访问</div>
         <div class="col action-col">操作</div>
       </div>
       
@@ -229,7 +229,7 @@ onMounted(() => {
               {{ 
                 serverStates[server.name]?.power === 'checking' ? '检测中...' : 
                 (serverStates[server.name]?.power === 'on' ? '已开机' : 
-                (serverStates[server.name]?.power === 'off' ? '已关机' : '未知'))
+                (serverStates[server.name]?.power === 'off' ? '已关机' : '无法获取'))
               }}
             </span>
           </div>
@@ -240,7 +240,7 @@ onMounted(() => {
               <span class="badge" :class="serverStates[server.name]?.network">
                 {{ 
                   serverStates[server.name]?.network === 'checking' ? '检测中...' : 
-                  (serverStates[server.name]?.network === 'online' ? '在线' : '不可达') 
+                  (serverStates[server.name]?.network === 'online' ? '可连接' : '不可达') 
                 }}
               </span>
             </template>

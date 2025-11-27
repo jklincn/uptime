@@ -22,6 +22,7 @@ import (
 type ServerConfig struct {
 	Name         string `toml:"name" json:"name"`
 	IP           string `toml:"ip" json:"ip"`
+	SSHPort      int    `toml:"ssh_port" json:"ssh_port"`
 	IPMIHost     string `toml:"ipmi_host" json:"-"`
 	IPMIUser     string `toml:"ipmi_user" json:"-"`
 	IPMIPassword string `toml:"ipmi_password" json:"-"`
@@ -280,7 +281,7 @@ func setPowerState(c *gin.Context) {
 	})
 }
 
-// checkNetworkStatus checks if the server is reachable via SSH (TCP 22)
+// checkNetworkStatus checks if the server is reachable via SSH (TCP)
 func checkNetworkStatus(c *gin.Context) {
 	var req NetworkRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -294,8 +295,14 @@ func checkNetworkStatus(c *gin.Context) {
 		return
 	}
 
-	// Check TCP connection to port 22
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(server.IP, "22"), 2*time.Second)
+	// Determine port (default to 22 if not specified)
+	port := "22"
+	if server.SSHPort != 0 {
+		port = strconv.Itoa(server.SSHPort)
+	}
+
+	// Check TCP connection to port
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(server.IP, port), 2*time.Second)
 	status := "offline"
 	if err == nil {
 		status = "online"
