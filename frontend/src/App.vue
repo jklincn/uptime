@@ -7,28 +7,49 @@ import SSHMonitor from './components/SSHMonitor.vue'
 const vpnGateway = ref({
   id: 'vpn-gw',
   name: 'OpenVPN Gateway',
-  ip: '10.8.0.1'
+  ip: '10.183.111.1'
 })
 
 // 局域网内部服务器列表
-const internalServers = ref([
-  { id: 1, name: 'Web Server 01', ip: '192.168.1.101' },
-  { id: 2, name: 'Database Server', ip: '192.168.1.102' },
-  { id: 3, name: 'Backup Server', ip: '192.168.1.103' },
-  { id: 5, name: 'Dev Environment', ip: '192.168.1.200' }
-])
+const internalServers = ref([])
+
+const fetchServers = async () => {
+  try {
+    const response = await fetch('http://localhost:23080/api/servers')
+    if (response.ok) {
+      internalServers.value = await response.json()
+    } else {
+      console.error('Failed to fetch servers')
+    }
+  } catch (error) {
+    console.error('Error fetching servers:', error)
+  }
+}
 
 const vpnStatus = ref('checking') // 'checking', 'online', 'offline'
 
 // 检查 VPN 状态
-const checkVpnStatus = () => {
+const checkVpnStatus = async () => {
   vpnStatus.value = 'checking'
-  // 模拟检查过程
-  setTimeout(() => {
-    // 模拟 90% 概率在线
-    const isOnline = Math.random() > 0.1
-    vpnStatus.value = isOnline ? 'online' : 'offline'
-  }, 1500)
+  
+  try {
+    // 1. 检查 VPN 连接状态 (Ping 10.183.111.1)
+    const vpnRes = await fetch('http://localhost:23080/api/vpn/status')
+    if (vpnRes.ok) {
+      const data = await vpnRes.json()
+      vpnStatus.value = data.status // 'online' or 'offline'
+      
+      // 2. 如果 VPN 在线，获取服务器列表
+      if (vpnStatus.value === 'online') {
+        fetchServers()
+      }
+    } else {
+      vpnStatus.value = 'offline'
+    }
+  } catch (error) {
+    console.error('Connection check failed:', error)
+    vpnStatus.value = 'offline'
+  }
 }
 
 onMounted(() => {

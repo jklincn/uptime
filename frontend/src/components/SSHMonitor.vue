@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 
 const props = defineProps({
   servers: {
@@ -21,29 +21,47 @@ const checkStatus = async (server) => {
   // 初始化状态
   serverStates.value[server.name] = { power: 'checking', network: 'waiting' }
   
-  // 1. 模拟检查电源状态 (BMC)
-  await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 600))
-  
-  // 模拟: 70% 开机, 20% 关机, 10% 无法获取
-  const rand = Math.random()
-  let powerStatus = 'on'
-  if (rand > 0.9) powerStatus = 'unknown'
-  else if (rand > 0.7) powerStatus = 'off'
-  
-  // 更新电源状态
-  serverStates.value[server.name].power = powerStatus
-  
-  // 2. 如果开机 或 无法获取电源状态，继续检查网络连通性
-  if (powerStatus === 'on' || powerStatus === 'unknown') {
-    serverStates.value[server.name].network = 'checking'
+  try {
+    // 1. 检查电源状态 (BMC)
+    const powerRes = await fetch('http://localhost:23080/api/ipmi/status', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ server_name: server.name })
+    })
     
-    await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 1000))
+    let powerStatus = 'unknown'
+    if (powerRes.ok) {
+      const data = await powerRes.json()
+      powerStatus = data.status
+    }
     
-    // 模拟 90% 网络可达
-    const isNetworkOnline = Math.random() > 0.1
-    serverStates.value[server.name].network = isNetworkOnline ? 'online' : 'offline'
-  } else {
-    serverStates.value[server.name].network = 'skipped'
+    // 更新电源状态
+    serverStates.value[server.name].power = powerStatus
+    
+    // 2. 如果开机 或 无法获取电源状态，继续检查网络连通性
+    if (powerStatus === 'on' || powerStatus === 'unknown') {
+      serverStates.value[server.name].network = 'checking'
+      
+      const netRes = await fetch('http://localhost:23080/api/network/status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server_name: server.name })
+      })
+      
+      let networkStatus = 'offline'
+      if (netRes.ok) {
+        const data = await netRes.json()
+        networkStatus = data.status
+      }
+      
+      serverStates.value[server.name].network = networkStatus
+    } else {
+      serverStates.value[server.name].network = 'skipped'
+    }
+  } catch (error) {
+    console.error('Check status failed:', error)
+    serverStates.value[server.name].power = 'unknown'
+    serverStates.value[server.name].network = 'offline'
   }
 }
 
@@ -64,35 +82,83 @@ const confirmAction = async () => {
   const { server, actionType } = pendingAction.value
   actionStatus.value = 'executing'
 
-  // 模拟 API 调用
   try {
-    // 模拟 3秒执行时间
-    await new Promise((resolve, reject) => {
-      setTimeout(() => {
-        // 模拟 10% 概率超时/失败
-        if (Math.random() > 0.9) {
-          reject(new Error('timeout'))
-        } else {
-          resolve()
-        }
-      }, 2000 + Math.random() * 1000)
+    const response = await fetch('http://localhost:23080/api/ipmi/control', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        server_name: server.name,
+        action: actionType
+      })
     })
 
-    actionStatus.value = 'success'
-    actionMessage.value = `${actionType === 'on' ? '开机' : '关机'}指令已发送成功`
-    
-    // 更新本地状态为检测中
-    serverStates.value[server.name].power = 'checking'
-    serverStates.value[server.name].network = 'waiting'
+    if (!response.ok) {
+      throw new Error('API request failed')
+    }
+
+    const data = await response.json()
+    if (data.success) {
+      // 开始轮询检查状态变化
+      const startTime = Date.now()
+      const timeout = 30000 // 30秒超时
+      
+      const pollStatus = async () => {
+        // 如果弹窗已关闭或操作已取消，停止轮询
+        if (!pendingAction.value) return
+
+        // 检查超时
+        if (Date.now() - startTime > timeout) {
+          actionStatus.value = 'timeout'
+          actionMessage.value = '操作超时：状态未在预期时间内变化'
+          // 超时后刷新一次状态
+          checkStatus(server)
+          return
+        }
+
+        try {
+          const statusRes = await fetch('http://localhost:23080/api/ipmi/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ server_name: server.name })
+          })
+          
+          if (statusRes.ok) {
+            const statusData = await statusRes.json()
+            // 如果状态已变为预期状态
+            if (statusData.status === actionType) {
+              actionStatus.value = 'success'
+              actionMessage.value = `${actionType === 'on' ? '开机' : '关机'}成功`
+              
+              // 更新本地状态
+              serverStates.value[server.name].power = actionType
+              if (actionType === 'off') {
+                serverStates.value[server.name].network = 'skipped'
+              } else {
+                // 开机后，网络可能还没通，但电源状态已更新
+                serverStates.value[server.name].network = 'waiting'
+                // 触发一次完整检查（包含网络）
+                checkStatus(server)
+              }
+              return
+            }
+          }
+        } catch (e) {
+          console.error('Polling error:', e)
+        }
+        
+        // 1秒后重试
+        setTimeout(pollStatus, 1000)
+      }
+      
+      pollStatus()
+      
+    } else {
+      throw new Error(data.error || 'Unknown error')
+    }
 
   } catch (error) {
-    if (error.message === 'timeout') {
-      actionStatus.value = 'timeout'
-      actionMessage.value = '操作超时，请稍后重试'
-    } else {
-      actionStatus.value = 'error'
-      actionMessage.value = '操作失败，请检查网络或权限'
-    }
+    actionStatus.value = 'error'
+    actionMessage.value = '操作失败，请检查网络或权限'
   }
 }
 
@@ -115,10 +181,18 @@ const cancelAction = () => {
 }
 
 const checkAll = () => {
+  if (!props.servers) return
   props.servers.forEach(server => {
     checkStatus(server)
   })
 }
+
+// 监听 servers 列表变化，当列表加载完成后自动开始检查
+watch(() => props.servers, (newServers) => {
+  if (newServers && newServers.length > 0) {
+    checkAll()
+  }
+}, { immediate: true, deep: true })
 
 onMounted(() => {
   checkAll()

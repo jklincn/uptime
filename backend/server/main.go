@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"sync"
 	"time"
@@ -43,6 +44,11 @@ type IPMIRequest struct {
 	Action     string `json:"action"` // "on", "off", "cycle", "reset", "soft" (for control)
 }
 
+// NetworkRequest defines the payload for Network checks
+type NetworkRequest struct {
+	ServerName string `json:"server_name" binding:"required"`
+}
+
 func loadConfig() error {
 	configMu.Lock()
 	defer configMu.Unlock()
@@ -68,6 +74,15 @@ func getServerByName(name string) (ServerConfig, bool) {
 		}
 	}
 	return ServerConfig{}, false
+}
+
+func checkPing(ip string) bool {
+	// Use system ping command
+	// -c 1: send 1 packet
+	// -W 1: wait 1 second for response
+	cmd := exec.Command("ping", "-c", "1", "-W", "1", ip)
+	err := cmd.Run()
+	return err == nil
 }
 
 func main() {
@@ -105,6 +120,23 @@ func main() {
 		// IPMI Routes
 		api.POST("/ipmi/status", getPowerStatus)
 		api.POST("/ipmi/control", setPowerState)
+
+		// Network Routes
+		api.POST("/network/status", checkNetworkStatus)
+
+		// VPN Status Route
+		api.GET("/vpn/status", func(c *gin.Context) {
+			targetIP := "10.183.111.1"
+			online := checkPing(targetIP)
+			status := "offline"
+			if online {
+				status = "online"
+			}
+			c.JSON(http.StatusOK, gin.H{
+				"status": status,
+				"ip":     targetIP,
+			})
+		})
 	}
 
 	fmt.Println("Server starting on :23080")
@@ -248,4 +280,29 @@ func setPowerState(c *gin.Context) {
 	})
 }
 
-// executeIPMICommand is removed in favor of native library
+// checkNetworkStatus checks if the server is reachable via SSH (TCP 22)
+func checkNetworkStatus(c *gin.Context) {
+	var req NetworkRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	server, found := getServerByName(req.ServerName)
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Server not found"})
+		return
+	}
+
+	// Check TCP connection to port 22
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(server.IP, "22"), 2*time.Second)
+	status := "offline"
+	if err == nil {
+		status = "online"
+		conn.Close()
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"status": status,
+	})
+}
