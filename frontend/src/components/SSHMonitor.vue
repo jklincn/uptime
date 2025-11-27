@@ -19,7 +19,7 @@ const actionMessage = ref('')
 
 const checkStatus = async (server) => {
   // 初始化状态
-  serverStates.value[server.id] = { power: 'checking', network: 'waiting' }
+  serverStates.value[server.name] = { power: 'checking', network: 'waiting' }
   
   // 1. 模拟检查电源状态 (BMC)
   await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 600))
@@ -31,24 +31,24 @@ const checkStatus = async (server) => {
   else if (rand > 0.7) powerStatus = 'off'
   
   // 更新电源状态
-  serverStates.value[server.id].power = powerStatus
+  serverStates.value[server.name].power = powerStatus
   
   // 2. 如果开机 或 无法获取电源状态，继续检查网络连通性
   if (powerStatus === 'on' || powerStatus === 'unknown') {
-    serverStates.value[server.id].network = 'checking'
+    serverStates.value[server.name].network = 'checking'
     
     await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 1000))
     
     // 模拟 90% 网络可达
     const isNetworkOnline = Math.random() > 0.1
-    serverStates.value[server.id].network = isNetworkOnline ? 'online' : 'offline'
+    serverStates.value[server.name].network = isNetworkOnline ? 'online' : 'offline'
   } else {
-    serverStates.value[server.id].network = 'skipped'
+    serverStates.value[server.name].network = 'skipped'
   }
 }
 
 const togglePower = (server) => {
-  const currentState = serverStates.value[server.id]?.power
+  const currentState = serverStates.value[server.name]?.power
   if (!currentState || currentState === 'checking' || currentState === 'unknown') return
 
   const actionType = currentState === 'on' ? 'off' : 'on'
@@ -82,8 +82,8 @@ const confirmAction = async () => {
     actionMessage.value = `${actionType === 'on' ? '开机' : '关机'}指令已发送成功`
     
     // 更新本地状态为检测中
-    serverStates.value[server.id].power = 'checking'
-    serverStates.value[server.id].network = 'waiting'
+    serverStates.value[server.name].power = 'checking'
+    serverStates.value[server.name].network = 'waiting'
 
   } catch (error) {
     if (error.message === 'timeout') {
@@ -144,33 +144,33 @@ onMounted(() => {
       </div>
       
       <transition-group name="list" tag="div">
-        <div v-for="server in servers" :key="server.id" class="list-item">
+        <div v-for="server in servers" :key="server.name" class="list-item">
           <div class="col name">{{ server.name }}</div>
           <div class="col ip">{{ server.ip }}</div>
           
           <!-- 电源状态 -->
           <div class="col power">
-            <span class="status-dot" :class="serverStates[server.id]?.power || 'unknown'"></span>
+            <span class="status-dot" :class="serverStates[server.name]?.power || 'unknown'"></span>
             <span class="status-text">
               {{ 
-                serverStates[server.id]?.power === 'checking' ? '检测中...' : 
-                (serverStates[server.id]?.power === 'on' ? '已开机' : 
-                (serverStates[server.id]?.power === 'off' ? '已关机' : '无法获取'))
+                serverStates[server.name]?.power === 'checking' ? '检测中...' : 
+                (serverStates[server.name]?.power === 'on' ? '已开机' : 
+                (serverStates[server.name]?.power === 'off' ? '已关机' : '无法获取'))
               }}
             </span>
           </div>
 
           <!-- 网络状态 -->
           <div class="col network-status">
-            <template v-if="serverStates[server.id]?.power === 'on' || serverStates[server.id]?.power === 'unknown'">
-              <span class="badge" :class="serverStates[server.id]?.network">
+            <template v-if="serverStates[server.name]?.power === 'on' || serverStates[server.name]?.power === 'unknown'">
+              <span class="badge" :class="serverStates[server.name]?.network">
                 {{ 
-                  serverStates[server.id]?.network === 'checking' ? '检测中...' : 
-                  (serverStates[server.id]?.network === 'online' ? '在线' : '不可达') 
+                  serverStates[server.name]?.network === 'checking' ? '检测中...' : 
+                  (serverStates[server.name]?.network === 'online' ? '在线' : '不可达') 
                 }}
               </span>
             </template>
-            <span v-else-if="serverStates[server.id]?.power === 'off'" class="text-muted">
+            <span v-else-if="serverStates[server.name]?.power === 'off'" class="text-muted">
               -
             </span>
             <span v-else class="text-muted">...</span>
@@ -180,18 +180,18 @@ onMounted(() => {
           <div class="col action action-col">
             <button 
               class="action-btn power-btn" 
-              :class="serverStates[server.id]?.power === 'on' ? 'btn-danger' : (serverStates[server.id]?.power === 'off' ? 'btn-success' : 'btn-disabled')"
+              :class="serverStates[server.name]?.power === 'on' ? 'btn-danger' : (serverStates[server.name]?.power === 'off' ? 'btn-success' : 'btn-disabled')"
               @click="togglePower(server)"
-              :disabled="serverStates[server.id]?.power === 'checking' || serverStates[server.id]?.power === 'unknown'"
-              :title="serverStates[server.id]?.power === 'on' ? '关机' : (serverStates[server.id]?.power === 'off' ? '开机' : '无法操作')"
+              :disabled="serverStates[server.name]?.power === 'checking' || serverStates[server.name]?.power === 'unknown'"
+              :title="serverStates[server.name]?.power === 'on' ? '关机' : (serverStates[server.name]?.power === 'off' ? '开机' : '无法操作')"
             >
-              {{ serverStates[server.id]?.power === 'on' ? '关机' : (serverStates[server.id]?.power === 'off' ? '开机' : '无法操作') }}
+              {{ serverStates[server.name]?.power === 'on' ? '关机' : (serverStates[server.name]?.power === 'off' ? '开机' : '无法操作') }}
             </button>
             
             <button 
               class="action-btn retry-btn" 
               @click="checkStatus(server)" 
-              :disabled="serverStates[server.id]?.power === 'checking' || serverStates[server.id]?.network === 'checking'"
+              :disabled="serverStates[server.name]?.power === 'checking' || serverStates[server.name]?.network === 'checking'"
               title="重试连接"
             >
               重试

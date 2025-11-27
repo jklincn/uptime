@@ -1,0 +1,3 @@
+*.ovpn
+*.service
+backend/server_info.toml
