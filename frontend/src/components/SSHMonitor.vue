@@ -8,69 +8,110 @@ const props = defineProps({
   }
 })
 
-// 存储每个服务器的状态：{ power: 'on'|'off'|'checking'|'unknown', ssh: 'online'|'offline'|'checking'|'waiting'|'skipped' }
+// 存储每个服务器的状态：{ power: 'on'|'off'|'checking'|'unknown', network: 'online'|'offline'|'checking'|'waiting'|'skipped' }
 const serverStates = ref({})
 
 // 确认对话框状态
 const showConfirmModal = ref(false)
 const pendingAction = ref(null) // { server: object, actionType: 'on'|'off' }
+const actionStatus = ref('confirm') // 'confirm' | 'executing' | 'success' | 'error' | 'timeout'
+const actionMessage = ref('')
 
 const checkStatus = async (server) => {
   // 初始化状态
-  serverStates.value[server.id] = { power: 'checking', ssh: 'waiting' }
+  serverStates.value[server.id] = { power: 'checking', network: 'waiting' }
   
   // 1. 模拟检查电源状态 (BMC)
   await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 600))
   
-  // 模拟 80% 概率开机
-  const isPowerOn = Math.random() > 0.2
+  // 模拟: 70% 开机, 20% 关机, 10% 无法获取
+  const rand = Math.random()
+  let powerStatus = 'on'
+  if (rand > 0.9) powerStatus = 'unknown'
+  else if (rand > 0.7) powerStatus = 'off'
   
   // 更新电源状态
-  serverStates.value[server.id].power = isPowerOn ? 'on' : 'off'
+  serverStates.value[server.id].power = powerStatus
   
-  // 2. 如果开机，继续检查 SSH
-  if (isPowerOn) {
-    serverStates.value[server.id].ssh = 'checking'
+  // 2. 如果开机 或 无法获取电源状态，继续检查网络连通性
+  if (powerStatus === 'on' || powerStatus === 'unknown') {
+    serverStates.value[server.id].network = 'checking'
     
     await new Promise(resolve => setTimeout(resolve, 600 + Math.random() * 1000))
     
-    // 模拟 90% SSH 可连接
-    const isSshOnline = Math.random() > 0.1
-    serverStates.value[server.id].ssh = isSshOnline ? 'online' : 'offline'
+    // 模拟 90% 网络可达
+    const isNetworkOnline = Math.random() > 0.1
+    serverStates.value[server.id].network = isNetworkOnline ? 'online' : 'offline'
   } else {
-    serverStates.value[server.id].ssh = 'skipped'
+    serverStates.value[server.id].network = 'skipped'
   }
 }
 
 const togglePower = (server) => {
   const currentState = serverStates.value[server.id]?.power
-  if (!currentState || currentState === 'checking') return
+  if (!currentState || currentState === 'checking' || currentState === 'unknown') return
 
   const actionType = currentState === 'on' ? 'off' : 'on'
   pendingAction.value = { server, actionType }
+  actionStatus.value = 'confirm'
+  actionMessage.value = ''
   showConfirmModal.value = true
 }
 
 const confirmAction = async () => {
   if (!pendingAction.value) return
   
-  const { server } = pendingAction.value
+  const { server, actionType } = pendingAction.value
+  actionStatus.value = 'executing'
+
+  // 模拟 API 调用
+  try {
+    // 模拟 3秒执行时间
+    await new Promise((resolve, reject) => {
+      setTimeout(() => {
+        // 模拟 10% 概率超时/失败
+        if (Math.random() > 0.9) {
+          reject(new Error('timeout'))
+        } else {
+          resolve()
+        }
+      }, 2000 + Math.random() * 1000)
+    })
+
+    actionStatus.value = 'success'
+    actionMessage.value = `${actionType === 'on' ? '开机' : '关机'}指令已发送成功`
+    
+    // 更新本地状态为检测中
+    serverStates.value[server.id].power = 'checking'
+    serverStates.value[server.id].network = 'waiting'
+
+  } catch (error) {
+    if (error.message === 'timeout') {
+      actionStatus.value = 'timeout'
+      actionMessage.value = '操作超时，请稍后重试'
+    } else {
+      actionStatus.value = 'error'
+      actionMessage.value = '操作失败，请检查网络或权限'
+    }
+  }
+}
+
+const closeResultModal = () => {
+  const { server } = pendingAction.value || {}
   showConfirmModal.value = false
   pendingAction.value = null
-
-  // 设置为检测中，模拟操作延迟
-  serverStates.value[server.id].power = 'checking'
-  serverStates.value[server.id].ssh = 'waiting'
+  actionStatus.value = 'confirm'
   
-  await new Promise(resolve => setTimeout(resolve, 1500))
-  
-  // 操作完成后重新检查状态
-  checkStatus(server)
+  // 如果操作成功，关闭弹窗后刷新状态
+  if (server) {
+    checkStatus(server)
+  }
 }
 
 const cancelAction = () => {
   showConfirmModal.value = false
   pendingAction.value = null
+  actionStatus.value = 'confirm'
 }
 
 const checkAll = () => {
@@ -87,7 +128,10 @@ onMounted(() => {
 <template>
   <div class="monitor-container">
     <div class="header">
-      <button @click="checkAll" class="refresh-btn">刷新列表状态</button>
+      <h2>局域网服务器状态</h2>
+      <button @click="checkAll" class="refresh-btn">
+        <span class="btn-icon">↻</span> 刷新列表状态
+      </button>
     </div>
     
     <div class="server-list">
@@ -95,135 +139,301 @@ onMounted(() => {
         <div class="col">服务器名称</div>
         <div class="col">IP 地址</div>
         <div class="col">电源状态</div>
-        <div class="col">SSH 连接</div>
+        <div class="col">网络状态</div>
         <div class="col action-col">操作</div>
       </div>
-      <div v-for="server in servers" :key="server.id" class="list-item">
-        <div class="col name">{{ server.name }}</div>
-        <div class="col ip">{{ server.ip }}</div>
-        
-        <!-- 电源状态 -->
-        <div class="col power">
-          <span class="status-dot" :class="serverStates[server.id]?.power || 'unknown'"></span>
-          <span class="status-text">
-            {{ 
-              serverStates[server.id]?.power === 'checking' ? '检测中...' : 
-              (serverStates[server.id]?.power === 'on' ? '已开机' : 
-              (serverStates[server.id]?.power === 'off' ? '已关机' : '未知'))
-            }}
-          </span>
-        </div>
-
-        <!-- SSH 状态 -->
-        <div class="col ssh-status">
-          <template v-if="serverStates[server.id]?.power === 'on'">
-            <span class="badge" :class="serverStates[server.id]?.ssh">
+      
+      <transition-group name="list" tag="div">
+        <div v-for="server in servers" :key="server.id" class="list-item">
+          <div class="col name">{{ server.name }}</div>
+          <div class="col ip">{{ server.ip }}</div>
+          
+          <!-- 电源状态 -->
+          <div class="col power">
+            <span class="status-dot" :class="serverStates[server.id]?.power || 'unknown'"></span>
+            <span class="status-text">
               {{ 
-                serverStates[server.id]?.ssh === 'checking' ? '连接中...' : 
-                (serverStates[server.id]?.ssh === 'online' ? '可连接' : '不可达') 
+                serverStates[server.id]?.power === 'checking' ? '检测中...' : 
+                (serverStates[server.id]?.power === 'on' ? '已开机' : 
+                (serverStates[server.id]?.power === 'off' ? '已关机' : '无法获取'))
               }}
             </span>
-          </template>
-          <span v-else-if="serverStates[server.id]?.power === 'off'" class="text-muted">
-            -
-          </span>
-          <span v-else class="text-muted">...</span>
-        </div>
+          </div>
 
-        <!-- 操作 -->
-        <div class="col action action-col">
-          <button 
-            class="action-btn power-btn" 
-            :class="serverStates[server.id]?.power === 'on' ? 'btn-danger' : 'btn-success'"
-            @click="togglePower(server)"
-            :disabled="serverStates[server.id]?.power === 'checking'"
-          >
-            {{ serverStates[server.id]?.power === 'on' ? '关机' : '开机' }}
-          </button>
-          
-          <button 
-            class="action-btn retry-btn" 
-            @click="checkStatus(server)" 
-            :disabled="serverStates[server.id]?.power === 'checking' || serverStates[server.id]?.ssh === 'checking'"
-          >
-            重试
-          </button>
+          <!-- 网络状态 -->
+          <div class="col network-status">
+            <template v-if="serverStates[server.id]?.power === 'on' || serverStates[server.id]?.power === 'unknown'">
+              <span class="badge" :class="serverStates[server.id]?.network">
+                {{ 
+                  serverStates[server.id]?.network === 'checking' ? '检测中...' : 
+                  (serverStates[server.id]?.network === 'online' ? '在线' : '不可达') 
+                }}
+              </span>
+            </template>
+            <span v-else-if="serverStates[server.id]?.power === 'off'" class="text-muted">
+              -
+            </span>
+            <span v-else class="text-muted">...</span>
+          </div>
+
+          <!-- 操作 -->
+          <div class="col action action-col">
+            <button 
+              class="action-btn power-btn" 
+              :class="serverStates[server.id]?.power === 'on' ? 'btn-danger' : (serverStates[server.id]?.power === 'off' ? 'btn-success' : 'btn-disabled')"
+              @click="togglePower(server)"
+              :disabled="serverStates[server.id]?.power === 'checking' || serverStates[server.id]?.power === 'unknown'"
+              :title="serverStates[server.id]?.power === 'on' ? '关机' : (serverStates[server.id]?.power === 'off' ? '开机' : '无法操作')"
+            >
+              {{ serverStates[server.id]?.power === 'on' ? '关机' : (serverStates[server.id]?.power === 'off' ? '开机' : '无法操作') }}
+            </button>
+            
+            <button 
+              class="action-btn retry-btn" 
+              @click="checkStatus(server)" 
+              :disabled="serverStates[server.id]?.power === 'checking' || serverStates[server.id]?.network === 'checking'"
+              title="重试连接"
+            >
+              重试
+            </button>
+          </div>
         </div>
-      </div>
+      </transition-group>
     </div>
 
     <!-- 确认对话框 Modal -->
-    <div v-if="showConfirmModal" class="modal-overlay">
-      <div class="modal-content">
-        <h3>确认操作</h3>
-        <p>确定要对 <strong>{{ pendingAction?.server.name }}</strong> 执行 <strong>{{ pendingAction?.actionType === 'on' ? '开机' : '关机' }}</strong> 操作吗？</p>
-        <div class="modal-actions">
-          <button @click="cancelAction" class="modal-btn cancel">取消</button>
-          <button 
-            @click="confirmAction" 
-            class="modal-btn confirm" 
-            :class="pendingAction?.actionType === 'on' ? 'confirm-on' : 'confirm-off'"
-          >
-            确定{{ pendingAction?.actionType === 'on' ? '开机' : '关机' }}
-          </button>
+    <transition name="modal">
+      <div v-if="showConfirmModal" class="modal-overlay">
+        <div class="modal-content">
+          <!-- 标题始终显示 -->
+          <h3 :class="actionStatus === 'success' ? 'success' : (actionStatus === 'error' || actionStatus === 'timeout' ? 'error' : '')">
+            {{ 
+              actionStatus === 'confirm' ? '确认操作' : 
+              (actionStatus === 'executing' ? '正在执行...' : 
+              (actionStatus === 'success' ? '操作成功' : '操作失败')) 
+            }}
+          </h3>
+
+          <!-- 内容区域固定高度 -->
+          <div class="modal-body">
+            <!-- 确认阶段 -->
+            <template v-if="actionStatus === 'confirm'">
+              <div class="confirm-icon">!</div>
+              <p>确定要对 <strong class="server-name">{{ pendingAction?.server.name }}</strong> 执行 <strong :class="pendingAction?.actionType === 'on' ? 'text-success' : 'text-danger'">{{ pendingAction?.actionType === 'on' ? '开机' : '关机' }}</strong> 操作吗？</p>
+            </template>
+
+            <!-- 执行中阶段 -->
+            <template v-else-if="actionStatus === 'executing'">
+              <div class="loading-spinner"></div>
+              <p>正在发送{{ pendingAction?.actionType === 'on' ? '开机' : '关机' }}指令，请稍候...</p>
+            </template>
+
+            <!-- 结果阶段 -->
+            <template v-else>
+              <div class="result-icon" :class="actionStatus">
+                {{ actionStatus === 'success' ? '✓' : '!' }}
+              </div>
+              <p>{{ actionMessage }}</p>
+            </template>
+          </div>
+
+          <!-- 按钮区域 -->
+          <div class="modal-actions">
+            <template v-if="actionStatus === 'confirm'">
+              <button @click="cancelAction" class="modal-btn cancel">取消</button>
+              <button 
+                @click="confirmAction" 
+                class="modal-btn confirm" 
+                :class="pendingAction?.actionType === 'on' ? 'confirm-on' : 'confirm-off'"
+              >
+                确定{{ pendingAction?.actionType === 'on' ? '开机' : '关机' }}
+              </button>
+            </template>
+            <template v-else-if="actionStatus === 'executing'">
+              <!-- 执行中不显示按钮，或者显示禁用按钮 -->
+            </template>
+            <template v-else>
+              <button @click="closeResultModal" class="modal-btn primary">关闭</button>
+            </template>
+          </div>
         </div>
       </div>
-    </div>
+    </transition>
   </div>
 </template>
 
 <style scoped>
+/* ...existing code... */
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid var(--primary-color);
+  border-radius: 50%;
+  margin: 0 0 20px 0;
+  animation: spin 1s linear infinite;
+}
+
+.result-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 20px 0;
+  font-size: 24px;
+  font-weight: bold;
+  color: white;
+}
+
+.result-icon.success {
+  background-color: var(--success-color);
+}
+
+.result-icon.error, .result-icon.timeout {
+  background-color: var(--danger-color);
+}
+
+.confirm-icon {
+  width: 48px;
+  height: 48px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 0 20px 0;
+  font-size: 24px;
+  font-weight: bold;
+  color: #d97706; /* Amber 600 */
+  background-color: #fffbeb; /* Amber 50 */
+  border: 1px solid #fcd34d; /* Amber 300 */
+}
+
+.server-name {
+  color: var(--text-main);
+  font-size: 1.1em;
+}
+
+.text-success { color: var(--success-color); }
+.text-danger { color: var(--danger-color); }
+
+h3.success { color: var(--success-color); }
+h3.error, h3.timeout { color: var(--danger-color); }
+
+.modal-btn.primary {
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+}
+.modal-btn.primary:hover {
+  background-color: var(--primary-hover);
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
 .monitor-container {
   padding: 0;
 }
 
 .header {
   display: flex;
-  justify-content: flex-end;
-  margin-bottom: 15px;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.header h2 {
+  margin: 0;
+  font-size: 1.125rem;
+  font-weight: 600;
+  color: var(--text-main);
 }
 
 .refresh-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 8px 16px;
-  background-color: #2196F3;
-  color: white;
-  border: none;
-  border-radius: 4px;
+  background-color: white;
+  color: var(--text-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background-color 0.2s;
+  transition: all 0.2s;
+  font-size: 0.875rem;
+  font-weight: 500;
+  box-shadow: var(--shadow-sm);
 }
 
 .refresh-btn:hover {
-  background-color: #1976D2;
+  background-color: var(--bg-page);
+  border-color: var(--text-secondary);
+  transform: translateY(-1px);
+}
+
+.refresh-btn:active {
+  transform: translateY(0);
+}
+
+.btn-icon {
+  font-size: 1.1em;
+  line-height: 1;
 }
 
 .server-list {
-  background: white;
-  border-radius: 8px;
-  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
   overflow: hidden;
+  border: 1px solid var(--border-color);
 }
 
 .list-header {
   display: grid;
   grid-template-columns: 2fr 2fr 1.5fr 1.5fr 2fr;
-  padding: 15px 20px;
-  background: #f5f5f5;
-  font-weight: bold;
-  color: #666;
-  border-bottom: 1px solid #eee;
+  padding: 16px 24px;
+  background: var(--bg-page);
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  border-bottom: 1px solid var(--border-color);
 }
 
 .list-item {
   display: grid;
   grid-template-columns: 2fr 2fr 1.5fr 1.5fr 2fr;
-  padding: 15px 20px;
-  border-bottom: 1px solid #eee;
+  padding: 16px 24px;
+  border-bottom: 1px solid var(--border-color);
   align-items: center;
+  transition: background-color 0.2s;
 }
 
 .list-item:last-child {
   border-bottom: none;
+}
+
+.list-item:hover {
+  background-color: #f9fafb;
+}
+
+.col {
+  font-size: 0.9375rem;
+}
+
+.col.name {
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+.col.ip {
+  font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  letter-spacing: 0.02em;
 }
 
 /* Power Status Styles */
@@ -232,13 +442,14 @@ onMounted(() => {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  margin-right: 6px;
-  background-color: #ccc;
+  margin-right: 8px;
+  background-color: var(--text-secondary);
 }
 
-.status-dot.on { background-color: #4CAF50; box-shadow: 0 0 4px #4CAF50; }
-.status-dot.off { background-color: #9e9e9e; }
-.status-dot.checking { background-color: #ff9800; animation: blink 1s infinite; }
+.status-dot.on { background-color: var(--success-color); box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2); }
+.status-dot.off { background-color: var(--text-secondary); opacity: 0.5; }
+.status-dot.unknown { background-color: var(--warning-color); opacity: 0.5; }
+.status-dot.checking { background-color: var(--warning-color); animation: blink 1s infinite; }
 
 @keyframes blink {
   50% { opacity: 0.5; }
@@ -246,17 +457,18 @@ onMounted(() => {
 
 /* SSH Badge Styles */
 .badge {
-  padding: 4px 8px;
-  border-radius: 12px;
-  font-size: 0.85em;
-  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.025em;
 }
 
-.badge.online { background-color: #e8f5e9; color: #2e7d32; }
-.badge.offline { background-color: #ffebee; color: #c62828; }
-.badge.checking { background-color: #e3f2fd; color: #1565c0; }
+.badge.online { background-color: #d1fae5; color: #065f46; }
+.badge.offline { background-color: #fee2e2; color: #991b1b; }
+.badge.checking { background-color: #dbeafe; color: #1e40af; }
 
-.text-muted { color: #ccc; }
+.text-muted { color: var(--text-secondary); opacity: 0.5; }
 
 /* Action Buttons */
 .action-col {
@@ -265,43 +477,66 @@ onMounted(() => {
 }
 
 .action-btn {
-  padding: 4px 12px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
   cursor: pointer;
-  font-size: 0.9em;
+  font-size: 0.8125rem;
+  font-weight: 500;
   background: white;
   transition: all 0.2s;
+  color: var(--text-main);
 }
 
 .action-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+  background-color: var(--bg-page);
 }
 
 .retry-btn:hover:not(:disabled) {
-  background: #f5f5f5;
-  border-color: #ccc;
+  background: var(--bg-page);
+  border-color: var(--text-secondary);
 }
 
 .btn-success {
-  color: #2e7d32;
-  border-color: #a5d6a7;
-  background-color: #e8f5e9;
+  color: var(--success-color);
+  border-color: #d1fae5;
+  background-color: #ecfdf5;
 }
 
 .btn-success:hover:not(:disabled) {
-  background-color: #c8e6c9;
+  background-color: #d1fae5;
+  border-color: var(--success-color);
 }
 
 .btn-danger {
-  color: #c62828;
-  border-color: #ef9a9a;
-  background-color: #ffebee;
+  color: var(--danger-color);
+  border-color: #fee2e2;
+  background-color: #fef2f2;
 }
 
 .btn-danger:hover:not(:disabled) {
-  background-color: #ffcdd2;
+  background-color: #fee2e2;
+  border-color: var(--danger-color);
+}
+
+.btn-disabled {
+  color: var(--text-secondary);
+  border-color: var(--border-color);
+  background-color: var(--bg-page);
+  cursor: not-allowed;
+}
+
+/* List Transitions */
+.list-enter-active,
+.list-leave-active {
+  transition: all 0.3s ease;
+}
+.list-enter-from,
+.list-leave-to {
+  opacity: 0;
+  transform: translateX(-10px);
 }
 
 /* Modal Styles */
@@ -311,85 +546,129 @@ onMounted(() => {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.4);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
-  backdrop-filter: blur(2px);
+  backdrop-filter: blur(4px);
 }
 
 .modal-content {
-  background: white;
-  padding: 24px;
-  border-radius: 12px;
-  width: 400px;
+  background: var(--bg-card);
+  padding: 40px 48px;
+  border-radius: var(--radius-lg);
+  width: 480px;
   max-width: 90%;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+  min-height: 320px;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-start;
+  align-items: center;
+  box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
   text-align: center;
-  animation: modal-in 0.3s ease-out;
+  box-sizing: border-box;
 }
 
-@keyframes modal-in {
-  from { opacity: 0; transform: translateY(-20px); }
-  to { opacity: 1; transform: translateY(0); }
+.modal-body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  min-height: 140px;
+}
+
+.modal-enter-active,
+.modal-leave-active {
+  transition: opacity 0.3s ease;
+}
+
+.modal-enter-from,
+.modal-leave-to {
+  opacity: 0;
+}
+
+.modal-enter-active .modal-content,
+.modal-leave-active .modal-content {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.modal-enter-from .modal-content,
+.modal-leave-to .modal-content {
+  transform: scale(0.95) translateY(10px);
 }
 
 .modal-content h3 {
-  margin-top: 0;
-  color: #333;
-  font-size: 1.2rem;
+  margin: 0 0 24px 0;
+  color: var(--text-main);
+  font-size: 1.25rem;
+  font-weight: 600;
+  flex-shrink: 0;
+  height: 28px;
+  line-height: 28px;
 }
 
 .modal-content p {
-  color: #666;
-  margin: 20px 0;
-  line-height: 1.5;
+  color: var(--text-secondary);
+  margin: 0;
+  line-height: 1.6;
+  width: 100%;
 }
 
 .modal-actions {
-  margin-top: 24px;
   display: flex;
   justify-content: center;
-  gap: 12px;
+  gap: 16px;
+  margin-top: auto;
+  flex-shrink: 0;
+  height: 44px;
+  width: 100%;
+  align-items: center;
 }
 
 .modal-btn {
-  padding: 8px 24px;
-  border-radius: 6px;
-  border: 1px solid #ddd;
+  padding: 10px 24px;
+  border-radius: var(--radius-md);
+  border: 1px solid transparent;
   cursor: pointer;
-  font-size: 1rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
   transition: all 0.2s;
 }
 
 .modal-btn.cancel {
   background: white;
-  color: #666;
+  color: var(--text-main);
+  border-color: var(--border-color);
 }
 
 .modal-btn.cancel:hover {
-  background: #f5f5f5;
+  background: var(--bg-page);
+  border-color: var(--text-secondary);
 }
 
 .modal-btn.confirm {
   color: white;
-  border: none;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.modal-btn.confirm:active {
+  transform: translateY(1px);
 }
 
 .modal-btn.confirm-on {
-  background-color: #4CAF50;
+  background-color: var(--success-color);
 }
 .modal-btn.confirm-on:hover {
-  background-color: #45a049;
-  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+  background-color: #059669; /* Emerald 600 */
 }
 
 .modal-btn.confirm-off {
-  background-color: #f44336;
+  background-color: var(--danger-color);
 }
 .modal-btn.confirm-off:hover {
-  background-color: #d32f2f;
-  box-shadow: 0 2px 8px rgba(244, 67, 54, 0.3);
+  background-color: #dc2626; /* Red 600 */
 }
 </style>

@@ -17,7 +17,10 @@ defineEmits(['retry'])
   <div class="vpn-monitor-card" :class="status">
     <div class="info-area">
       <div class="status-row">
-        <div class="status-indicator"></div>
+        <div class="status-indicator-wrapper">
+          <div class="status-indicator"></div>
+          <div class="status-ping" v-if="status === 'online' || status === 'checking'"></div>
+        </div>
         <h3>{{ server.name }}</h3>
       </div>
       <p class="status-message">
@@ -33,6 +36,7 @@ defineEmits(['retry'])
         class="retry-btn"
         :disabled="status === 'checking'"
       >
+        <span class="btn-icon" :class="{ spinning: status === 'checking' }">↻</span>
         {{ status === 'checking' ? '检测中...' : '刷新状态' }}
       </button>
     </div>
@@ -44,26 +48,31 @@ defineEmits(['retry'])
   display: flex;
   justify-content: space-between;
   align-items: center;
-  background: white;
-  border-radius: 8px;
-  padding: 16px 24px;
-  box-shadow: 0 2px 6px rgba(0,0,0,0.05);
-  margin-bottom: 20px;
-  border: 1px solid #eee;
-  border-left: 4px solid #ccc;
+  background: var(--bg-card);
+  border-radius: var(--radius-lg);
+  padding: 20px 24px;
+  box-shadow: var(--shadow-md);
+  margin-bottom: 32px;
+  border: 1px solid var(--border-color);
+  position: relative;
+  overflow: hidden;
+  transition: all 0.3s ease;
 }
 
-.vpn-monitor-card.online {
-  border-left-color: #4CAF50;
+.vpn-monitor-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background-color: var(--text-secondary);
+  transition: background-color 0.3s ease;
 }
 
-.vpn-monitor-card.offline {
-  border-left-color: #f44336;
-}
-
-.vpn-monitor-card.checking {
-  border-left-color: #ff9800;
-}
+.vpn-monitor-card.online::before { background-color: var(--success-color); }
+.vpn-monitor-card.offline::before { background-color: var(--danger-color); }
+.vpn-monitor-card.checking::before { background-color: var(--warning-color); }
 
 .info-area {
   flex: 1;
@@ -72,57 +81,115 @@ defineEmits(['retry'])
 .status-row {
   display: flex;
   align-items: center;
-  margin-bottom: 4px;
+  margin-bottom: 6px;
+}
+
+.status-indicator-wrapper {
+  position: relative;
+  width: 12px;
+  height: 12px;
+  margin-right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .status-indicator {
-  width: 10px;
-  height: 10px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  background-color: #ccc;
-  margin-right: 10px;
+  background-color: var(--text-secondary);
+  z-index: 2;
+  transition: background-color 0.3s ease;
 }
 
-.online .status-indicator { background-color: #4CAF50; }
-.offline .status-indicator { background-color: #f44336; }
-.checking .status-indicator { background-color: #ff9800; }
+.status-ping {
+  position: absolute;
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background-color: inherit;
+  opacity: 0.75;
+  animation: ping 1.5s cubic-bezier(0, 0, 0.2, 1) infinite;
+}
+
+.online .status-indicator { background-color: var(--success-color); }
+.online .status-ping { background-color: var(--success-color); }
+
+.offline .status-indicator { background-color: var(--danger-color); }
+
+.checking .status-indicator { background-color: var(--warning-color); }
+.checking .status-ping { background-color: var(--warning-color); }
+
+@keyframes ping {
+  75%, 100% {
+    transform: scale(2);
+    opacity: 0;
+  }
+}
 
 .info-area h3 {
   margin: 0;
-  font-size: 1.1rem;
-  color: #333;
+  font-size: 1.125rem;
+  color: var(--text-main);
   font-weight: 600;
 }
 
 .status-message {
   margin: 0;
-  font-size: 0.9rem;
-  color: #666;
-  padding-left: 20px; /* Align with text above (10px width + 10px margin) */
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  padding-left: 24px;
 }
 
 .action-area {
-  margin-left: 20px;
+  margin-left: 24px;
 }
 
 .retry-btn {
-  padding: 6px 16px;
-  border: 1px solid #ddd;
-  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
   background-color: white;
-  color: #333;
-  font-size: 0.9rem;
+  color: var(--text-main);
+  font-size: 0.875rem;
+  font-weight: 500;
   cursor: pointer;
   transition: all 0.2s;
+  box-shadow: var(--shadow-sm);
 }
 
 .retry-btn:hover:not(:disabled) {
-  background-color: #f5f5f5;
-  border-color: #ccc;
+  background-color: var(--bg-page);
+  border-color: var(--text-secondary);
+  transform: translateY(-1px);
+}
+
+.retry-btn:active:not(:disabled) {
+  transform: translateY(0);
 }
 
 .retry-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+  background-color: var(--bg-page);
+}
+
+.btn-icon {
+  font-size: 1.1em;
+  line-height: 1;
+}
+
+.spinning {
+  animation: spin 1s linear infinite;
+  display: inline-block;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 </style>
