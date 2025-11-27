@@ -229,7 +229,7 @@ onMounted(() => {
               {{ 
                 serverStates[server.name]?.power === 'checking' ? '检测中...' : 
                 (serverStates[server.name]?.power === 'on' ? '已开机' : 
-                (serverStates[server.name]?.power === 'off' ? '已关机' : '无法获取'))
+                (serverStates[server.name]?.power === 'off' ? '已关机' : '未知'))
               }}
             </span>
           </div>
@@ -337,7 +337,7 @@ onMounted(() => {
 </template>
 
 <style scoped>
-/* ...existing code... */
+
 .loading-spinner {
   width: 40px;
   height: 40px;
