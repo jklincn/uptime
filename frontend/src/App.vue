@@ -21,10 +21,24 @@ const vpnGateway = ref({
 
 // 局域网内部服务器列表
 const internalServers = ref([])
+const backendStatus = ref('checking') // 'checking', 'online', 'offline'
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('authToken')
   return token ? { 'Authorization': token } : {}
+}
+
+const checkBackendStatus = async () => {
+  try {
+    const res = await fetch('http://localhost:23080/api/ping')
+    if (res.ok) {
+      backendStatus.value = 'online'
+    } else {
+      backendStatus.value = 'offline'
+    }
+  } catch (e) {
+    backendStatus.value = 'offline'
+  }
 }
 
 const sendCode = async () => {
@@ -150,6 +164,7 @@ const checkVpnStatus = async () => {
 }
 
 onMounted(() => {
+  checkBackendStatus()
   const token = localStorage.getItem('authToken')
   if (token) {
     // 不直接设置 isAuthenticated = true，而是等待 checkVpnStatus 验证
@@ -165,6 +180,10 @@ onMounted(() => {
     <header class="main-header">
       <div class="header-content">
         <div class="logo">ServerMonitor</div>
+        <div class="backend-status" :class="backendStatus" title="后端服务状态">
+          <span class="status-dot"></span>
+          {{ backendStatus === 'online' ? '服务正常' : '服务离线' }}
+        </div>
       </div>
     </header>
 
@@ -437,6 +456,31 @@ button {
   background: var(--primary-color);
   border-radius: 3px;
   transform: rotate(45deg);
+}
+
+.backend-status {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+
+.backend-status .status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--text-secondary);
+}
+
+.backend-status.online .status-dot {
+  background-color: var(--success-color);
+  box-shadow: 0 0 0 2px rgba(16, 185, 129, 0.2);
+}
+
+.backend-status.offline .status-dot {
+  background-color: var(--danger-color);
 }
 
 .content-area {

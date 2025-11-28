@@ -162,15 +162,13 @@ func main() {
 	api.POST("/auth/send-code", sendCodeHandler)
 	api.POST("/auth/login", loginHandler)
 
+	// Public Health Check
+	api.GET("/ping", pingHandler)
+
 	// Protected Routes
 	protected := api.Group("/")
 	protected.Use(authMiddleware())
 	{
-		// Health check
-		protected.GET("/ping", func(c *gin.Context) {
-			c.JSON(http.StatusOK, gin.H{"message": "pong"})
-		})
-
 		// Get list of servers
 		protected.GET("/servers", getServers)
 
@@ -182,35 +180,43 @@ func main() {
 		protected.POST("/network/status", checkNetworkStatus)
 
 		// VPN Status Route
-		protected.GET("/vpn/status", func(c *gin.Context) {
-			configMu.RLock()
-			targetIP := appConfig.VPN.IP
-			targetName := appConfig.VPN.Name
-			configMu.RUnlock()
-
-			if targetIP == "" {
-				c.JSON(http.StatusOK, gin.H{
-					"status": "unknown",
-					"error":  "VPN not configured",
-				})
-				return
-			}
-
-			online := checkPing(targetIP)
-			status := "offline"
-			if online {
-				status = "online"
-			}
-			c.JSON(http.StatusOK, gin.H{
-				"status": status,
-				"ip":     targetIP,
-				"name":   targetName,
-			})
-		})
+		protected.GET("/vpn/status", vpnStatusHandler)
 	}
 
 	fmt.Println("Server starting on :23080")
 	r.Run(":23080")
+}
+
+// pingHandler handles health checks
+func pingHandler(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{"message": "pong"})
+}
+
+// vpnStatusHandler checks the status of the VPN connection
+func vpnStatusHandler(c *gin.Context) {
+	configMu.RLock()
+	targetIP := appConfig.VPN.IP
+	targetName := appConfig.VPN.Name
+	configMu.RUnlock()
+
+	if targetIP == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "unknown",
+			"error":  "VPN not configured",
+		})
+		return
+	}
+
+	online := checkPing(targetIP)
+	status := "offline"
+	if online {
+		status = "online"
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"status": status,
+		"ip":     targetIP,
+		"name":   targetName,
+	})
 }
 
 // Auth Handlers and Middleware
