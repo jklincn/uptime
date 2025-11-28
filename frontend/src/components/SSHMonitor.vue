@@ -17,6 +17,11 @@ const pendingAction = ref(null) // { server: object, actionType: 'on'|'off' }
 const actionStatus = ref('confirm') // 'confirm' | 'executing' | 'success' | 'error' | 'timeout'
 const actionMessage = ref('')
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('authToken')
+  return token ? { 'Authorization': token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' }
+}
+
 const checkStatus = async (server) => {
   // 初始化状态
   serverStates.value[server.name] = { power: 'checking', network: 'waiting' }
@@ -25,7 +30,7 @@ const checkStatus = async (server) => {
     // 1. 检查电源状态 (BMC)
     const powerRes = await fetch('http://localhost:23080/api/ipmi/status', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ server_name: server.name })
     })
     
@@ -33,6 +38,9 @@ const checkStatus = async (server) => {
     if (powerRes.ok) {
       const data = await powerRes.json()
       powerStatus = data.status
+    } else if (powerRes.status === 401) {
+      // 如果未授权，可能需要重新登录，这里简单处理为 unknown
+      console.error('Unauthorized access to IPMI status')
     }
     
     // 更新电源状态
@@ -44,7 +52,7 @@ const checkStatus = async (server) => {
       
       const netRes = await fetch('http://localhost:23080/api/network/status', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getAuthHeaders(),
         body: JSON.stringify({ server_name: server.name })
       })
       
@@ -85,7 +93,7 @@ const confirmAction = async () => {
   try {
     const response = await fetch('http://localhost:23080/api/ipmi/control', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: getAuthHeaders(),
       body: JSON.stringify({ 
         server_name: server.name,
         action: actionType
@@ -100,7 +108,8 @@ const confirmAction = async () => {
     if (data.success) {
       // 开始轮询检查状态变化
       const startTime = Date.now()
-      const timeout = 30000 // 30秒超时
+      // 根据日志，IPMI 响应可能长达 22秒，因此将超时时间延长至 60秒
+      const timeout = 60000 
       
       const pollStatus = async () => {
         // 如果弹窗已关闭或操作已取消，停止轮询
@@ -118,7 +127,7 @@ const confirmAction = async () => {
         try {
           const statusRes = await fetch('http://localhost:23080/api/ipmi/status', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: getAuthHeaders(),
             body: JSON.stringify({ server_name: server.name })
           })
           

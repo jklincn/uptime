@@ -3,22 +3,106 @@ import { ref, onMounted } from 'vue'
 import OpenVPNMonitor from './components/OpenVPNMonitor.vue'
 import SSHMonitor from './components/SSHMonitor.vue'
 
+// 认证状态
+const isAuthenticated = ref(false)
+const isCheckingAuth = ref(!!localStorage.getItem('authToken')) // 初始化检查状态
+const authForm = ref({
+  phone: '',
+  code: ''
+})
+const authStatus = ref('') // 'sending', 'sent', 'verifying', 'error'
+const authMessage = ref('')
+
 // OpenVPN 网关配置
 const vpnGateway = ref({
   id: 'vpn-gw',
-  name: 'OpenVPN Gateway',
-  ip: '10.183.111.1'
+  name: 'OpenVPN Gateway', // 默认名称，会被后端配置覆盖
 })
 
 // 局域网内部服务器列表
 const internalServers = ref([])
 
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('authToken')
+  return token ? { 'Authorization': token } : {}
+}
+
+const sendCode = async () => {
+  if (!authForm.value.phone) {
+    authMessage.value = '请输入手机号'
+    return
+  }
+  
+  authStatus.value = 'sending'
+  authMessage.value = ''
+  
+  try {
+    const res = await fetch('http://localhost:23080/api/auth/send-code', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ phone: authForm.value.phone })
+    })
+    
+    if (res.ok) {
+      authStatus.value = 'sent'
+      authMessage.value = '验证码已发送（请查看后端控制台）'
+    } else {
+      const data = await res.json()
+      authStatus.value = 'error'
+      authMessage.value = data.error || '发送失败'
+    }
+  } catch (e) {
+    authStatus.value = 'error'
+    authMessage.value = '网络错误'
+  }
+}
+
+const login = async () => {
+  if (!authForm.value.phone || !authForm.value.code) {
+    authMessage.value = '请输入手机号和验证码'
+    return
+  }
+  
+  authStatus.value = 'verifying'
+  
+  try {
+    const res = await fetch('http://localhost:23080/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        phone: authForm.value.phone,
+        code: authForm.value.code
+      })
+    })
+    
+    if (res.ok) {
+      const data = await res.json()
+      localStorage.setItem('authToken', data.token)
+      isAuthenticated.value = true
+      checkVpnStatus()
+    } else {
+      const data = await res.json()
+      authStatus.value = 'error'
+      authMessage.value = data.error || '验证失败'
+    }
+  } catch (e) {
+    authStatus.value = 'error'
+    authMessage.value = '网络错误'
+  }
+}
+
 const fetchServers = async () => {
   try {
-    const response = await fetch('http://localhost:23080/api/servers')
+    const response = await fetch('http://localhost:23080/api/servers', {
+      headers: getAuthHeaders()
+    })
     if (response.ok) {
       internalServers.value = await response.json()
     } else {
+      if (response.status === 401) {
+        isAuthenticated.value = false
+        localStorage.removeItem('authToken')
+      }
       console.error('Failed to fetch servers')
     }
   } catch (error) {
@@ -33,27 +117,46 @@ const checkVpnStatus = async () => {
   vpnStatus.value = 'checking'
   
   try {
-    // 1. 检查 VPN 连接状态 (Ping 10.183.111.1)
-    const vpnRes = await fetch('http://localhost:23080/api/vpn/status')
+    // 1. 检查 VPN 连接状态
+    const vpnRes = await fetch('http://localhost:23080/api/vpn/status', {
+      headers: getAuthHeaders()
+    })
+    
     if (vpnRes.ok) {
       const data = await vpnRes.json()
       vpnStatus.value = data.status // 'online' or 'offline'
+      if (data.name) {
+        vpnGateway.value.name = data.name
+      }
+      isAuthenticated.value = true // 确认认证成功
       
       // 2. 如果 VPN 在线，获取服务器列表
       if (vpnStatus.value === 'online') {
         fetchServers()
       }
     } else {
+      if (vpnRes.status === 401) {
+        isAuthenticated.value = false
+        localStorage.removeItem('authToken')
+      }
       vpnStatus.value = 'offline'
     }
   } catch (error) {
     console.error('Connection check failed:', error)
     vpnStatus.value = 'offline'
+  } finally {
+    isCheckingAuth.value = false // 检查完成
   }
 }
 
 onMounted(() => {
-  checkVpnStatus()
+  const token = localStorage.getItem('authToken')
+  if (token) {
+    // 不直接设置 isAuthenticated = true，而是等待 checkVpnStatus 验证
+    checkVpnStatus()
+  } else {
+    isCheckingAuth.value = false
+  }
 })
 </script>
 
@@ -66,23 +169,63 @@ onMounted(() => {
     </header>
 
     <main class="content-area">
-      <!-- OpenVPN 状态监控 -->
-      <section class="vpn-section">
-        <OpenVPNMonitor 
-          :server="vpnGateway" 
-          :status="vpnStatus" 
-          @retry="checkVpnStatus"
-        />
-      </section>
-
-      <!-- 内部服务器 SSH 监控 (仅当 VPN 在线时显示) -->
-      <section class="ssh-section" v-if="vpnStatus === 'online'">
-        <SSHMonitor :servers="internalServers" />
-      </section>
-      
-      <div v-else-if="vpnStatus === 'offline'" class="offline-notice">
-        <p>⚠️ OpenVPN 连接失败，无法访问内部服务器。</p>
+      <!-- 加载中状态 -->
+      <div v-if="isCheckingAuth" class="loading-container">
+        <div class="loading-spinner"></div>
+        <p>正在验证身份...</p>
       </div>
+
+      <!-- 登录认证界面 -->
+      <div v-else-if="!isAuthenticated" class="auth-container">
+        <div class="auth-card">
+          <h2>身份验证</h2>
+          <p class="auth-desc">请验证手机号以访问监控系统</p>
+          
+          <div class="form-group">
+            <label>手机号码</label>
+            <div class="input-group">
+              <input v-model="authForm.phone" type="text" placeholder="请输入手机号" />
+              <button @click="sendCode" :disabled="authStatus === 'sending' || authStatus === 'sent'">
+                {{ authStatus === 'sending' ? '发送中...' : (authStatus === 'sent' ? '已发送' : '获取验证码') }}
+              </button>
+            </div>
+          </div>
+          
+          <div class="form-group">
+            <label>验证码</label>
+            <input v-model="authForm.code" type="text" placeholder="请输入验证码" />
+          </div>
+          
+          <div v-if="authMessage" class="auth-message" :class="{ error: authStatus === 'error' }">
+            {{ authMessage }}
+          </div>
+          
+          <button class="login-btn" @click="login" :disabled="authStatus === 'verifying'">
+            {{ authStatus === 'verifying' ? '验证中...' : '确认登录' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- 主内容区域 -->
+      <template v-else>
+        <!-- OpenVPN 状态监控 -->
+        <section class="vpn-section">
+          <OpenVPNMonitor 
+            :server="vpnGateway" 
+            :status="vpnStatus" 
+            @retry="checkVpnStatus"
+          />
+        </section>
+
+        <!-- 内部服务器 SSH 监控 (仅当 VPN 在线时显示) -->
+        <section class="ssh-section" v-if="vpnStatus === 'online'">
+          <SSHMonitor :servers="internalServers" />
+        </section>
+        
+        <div v-else-if="vpnStatus === 'offline'" class="offline-notice">
+          <p>⚠️ OpenVPN 连接失败，无法访问内部服务器。</p>
+        </div>
+      </template>
     </main>
   </div>
 </template>
@@ -117,6 +260,136 @@ body {
 
 button {
   font-family: inherit;
+}
+
+/* 认证界面样式 */
+.auth-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 60vh;
+}
+
+.auth-card {
+  background: white;
+  padding: 2rem;
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+  width: 100%;
+  max-width: 400px;
+}
+
+.auth-card h2 {
+  margin-top: 0;
+  margin-bottom: 0.5rem;
+  text-align: center;
+  color: var(--text-main);
+}
+
+.auth-desc {
+  text-align: center;
+  color: var(--text-secondary);
+  margin-bottom: 2rem;
+}
+
+.form-group {
+  margin-bottom: 1.5rem;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: 0.5rem;
+  font-weight: 500;
+  color: var(--text-main);
+}
+
+.form-group input {
+  width: 100%;
+  padding: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  box-sizing: border-box;
+}
+
+.input-group {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input-group input {
+  flex: 1;
+}
+
+.input-group button {
+  padding: 0 1rem;
+  background: var(--bg-page);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.login-btn {
+  width: 100%;
+  padding: 0.75rem;
+  background: var(--primary-color);
+  color: white;
+  border: none;
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+.login-btn:hover {
+  background: var(--primary-hover);
+}
+
+.login-btn:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.auth-message {
+  margin-bottom: 1rem;
+  padding: 0.5rem;
+  border-radius: var(--radius-md);
+  background: #f0fdf4;
+  color: var(--success-color);
+  text-align: center;
+  font-size: 0.875rem;
+}
+
+.auth-message.error {
+  background: #fef2f2;
+  color: var(--danger-color);
+}
+
+/* 加载中状态样式 */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 60vh;
+  color: var(--text-secondary);
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f3f3;
+  border-top: 4px solid var(--primary-color);
+  border-radius: 50%;
+  margin-bottom: 16px;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
 }
 </style>
 

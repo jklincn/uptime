@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -12,7 +15,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/BurntSushi/toml"
 	"github.com/bougou/go-ipmi"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
@@ -20,17 +22,31 @@ import (
 
 // ServerConfig represents a single server configuration
 type ServerConfig struct {
-	Name         string `toml:"name" json:"name"`
-	IP           string `toml:"ip" json:"ip"`
-	SSHPort      int    `toml:"ssh_port" json:"ssh_port"`
-	IPMIHost     string `toml:"ipmi_host" json:"-"`
-	IPMIUser     string `toml:"ipmi_user" json:"-"`
-	IPMIPassword string `toml:"ipmi_password" json:"-"`
+	Name         string `json:"name"`
+	IP           string `json:"ip"`
+	SSHPort      int    `json:"ssh_port"`
+	IPMIHost     string `json:"ipmi_host"`
+	IPMIUser     string `json:"ipmi_user"`
+	IPMIPassword string `json:"ipmi_password"`
+}
+
+// UserConfig represents a user configuration
+type UserConfig struct {
+	Name  string `json:"name"`
+	Phone string `json:"phone"`
+}
+
+// VPNConfig represents VPN configuration
+type VPNConfig struct {
+	Name string `json:"name"`
+	IP   string `json:"ip"`
 }
 
 // Config represents the top-level configuration
 type Config struct {
-	Servers []ServerConfig `toml:"servers"`
+	VPN     VPNConfig      `json:"vpn"`
+	Users   []UserConfig   `json:"users"`
+	Servers []ServerConfig `json:"servers"`
 }
 
 // Global configuration
@@ -38,6 +54,25 @@ var (
 	appConfig Config
 	configMu  sync.RWMutex
 )
+
+// TokenData stores token information
+type TokenData struct {
+	Phone     string
+	ExpiresAt time.Time
+}
+
+// Auth storage
+var (
+	verificationCodes = make(map[string]string)    // phone -> code
+	authTokens        = make(map[string]TokenData) // token -> TokenData
+	authMu            sync.RWMutex
+)
+
+// AuthRequest defines the payload for authentication
+type AuthRequest struct {
+	Phone string `json:"phone" binding:"required"`
+	Code  string `json:"code"`
+}
 
 // IPMIRequest defines the payload for IPMI operations
 type IPMIRequest struct {
@@ -54,12 +89,12 @@ func loadConfig() error {
 	configMu.Lock()
 	defer configMu.Unlock()
 
-	data, err := os.ReadFile("server_info.toml")
+	data, err := os.ReadFile("server_info.json")
 	if err != nil {
 		return err
 	}
 
-	if _, err := toml.Decode(string(data), &appConfig); err != nil {
+	if err := json.Unmarshal(data, &appConfig); err != nil {
 		return err
 	}
 	return nil
@@ -89,11 +124,11 @@ func checkPing(ip string) bool {
 func main() {
 	// Load configuration
 	if err := loadConfig(); err != nil {
-		log.Printf("Warning: Could not load config.toml: %v", err)
+		log.Printf("Warning: Could not load server_info.json: %v", err)
 		// Create a dummy config if file doesn't exist to avoid crash
 		appConfig = Config{Servers: []ServerConfig{}}
 	} else {
-		fmt.Printf("Loaded %d servers from config.toml\n", len(appConfig.Servers))
+		fmt.Printf("Loaded %d servers from server_info.json\n", len(appConfig.Servers))
 	}
 
 	r := gin.Default()
@@ -109,25 +144,45 @@ func main() {
 	}))
 
 	api := r.Group("/api")
+
+	// Public Auth Routes
+	api.POST("/auth/send-code", sendCodeHandler)
+	api.POST("/auth/login", loginHandler)
+
+	// Protected Routes
+	protected := api.Group("/")
+	protected.Use(authMiddleware())
 	{
 		// Health check
-		api.GET("/ping", func(c *gin.Context) {
+		protected.GET("/ping", func(c *gin.Context) {
 			c.JSON(http.StatusOK, gin.H{"message": "pong"})
 		})
 
 		// Get list of servers
-		api.GET("/servers", getServers)
+		protected.GET("/servers", getServers)
 
 		// IPMI Routes
-		api.POST("/ipmi/status", getPowerStatus)
-		api.POST("/ipmi/control", setPowerState)
+		protected.POST("/ipmi/status", getPowerStatus)
+		protected.POST("/ipmi/control", setPowerState)
 
 		// Network Routes
-		api.POST("/network/status", checkNetworkStatus)
+		protected.POST("/network/status", checkNetworkStatus)
 
 		// VPN Status Route
-		api.GET("/vpn/status", func(c *gin.Context) {
-			targetIP := "10.183.111.1"
+		protected.GET("/vpn/status", func(c *gin.Context) {
+			configMu.RLock()
+			targetIP := appConfig.VPN.IP
+			targetName := appConfig.VPN.Name
+			configMu.RUnlock()
+
+			if targetIP == "" {
+				c.JSON(http.StatusOK, gin.H{
+					"status": "unknown",
+					"error":  "VPN not configured",
+				})
+				return
+			}
+
 			online := checkPing(targetIP)
 			status := "offline"
 			if online {
@@ -136,12 +191,117 @@ func main() {
 			c.JSON(http.StatusOK, gin.H{
 				"status": status,
 				"ip":     targetIP,
+				"name":   targetName,
 			})
 		})
 	}
 
 	fmt.Println("Server starting on :23080")
 	r.Run(":23080")
+}
+
+// Auth Handlers and Middleware
+
+func sendCodeHandler(c *gin.Context) {
+	var req AuthRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	configMu.RLock()
+	allowed := false
+	var userName string
+	for _, u := range appConfig.Users {
+		if u.Phone == req.Phone {
+			allowed = true
+			userName = u.Name
+			break
+		}
+	}
+	configMu.RUnlock()
+
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"error": "无效的手机号"})
+		return
+	}
+
+	// Generate random 6-digit code
+	// For simulation, we'll use a random number but print it to console
+	// In production, this would send an SMS
+	code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+
+	authMu.Lock()
+	verificationCodes[req.Phone] = code
+	authMu.Unlock()
+
+	fmt.Printf(">>> SIMULATED SMS for %s (%s): %s <<<\n", userName, req.Phone, code)
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Verification code sent"})
+}
+
+func loginHandler(c *gin.Context) {
+	var req AuthRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	authMu.RLock()
+	storedCode, exists := verificationCodes[req.Phone]
+	authMu.RUnlock()
+
+	if !exists || storedCode != req.Code {
+		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid verification code"})
+		return
+	}
+
+	// Generate token
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate token"})
+		return
+	}
+	token := hex.EncodeToString(b)
+
+	authMu.Lock()
+	authTokens[token] = TokenData{
+		Phone:     req.Phone,
+		ExpiresAt: time.Now().Add(7 * 24 * time.Hour), // Valid for 7 days
+	}
+	delete(verificationCodes, req.Phone) // Consume code
+	authMu.Unlock()
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "token": token})
+}
+
+func authMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		token := c.GetHeader("Authorization")
+		if token == "" {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Authorization header required"})
+			return
+		}
+
+		authMu.RLock()
+		tokenData, exists := authTokens[token]
+		authMu.RUnlock()
+
+		if !exists {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Invalid or expired token"})
+			return
+		}
+
+		if time.Now().After(tokenData.ExpiresAt) {
+			authMu.Lock()
+			delete(authTokens, token)
+			authMu.Unlock()
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "Token expired"})
+			return
+		}
+
+		c.Next()
+	}
 }
 
 // getServers returns the list of configured servers (without sensitive info)
