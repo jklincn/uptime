@@ -187,6 +187,14 @@ func getPowerStatus(c *gin.Context) {
 		return
 	}
 
+	if server.IPMIHost == "" {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "unknown",
+			"error":  "IPMI not configured",
+		})
+		return
+	}
+
 	client, err := getIPMIClient(server.IPMIHost, server.IPMIUser, server.IPMIPassword)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -234,6 +242,14 @@ func setPowerState(c *gin.Context) {
 	server, found := getServerByName(req.ServerName)
 	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"error": "Server not found"})
+		return
+	}
+
+	if server.IPMIHost == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"error":   "IPMI not configured for this server",
+		})
 		return
 	}
 
