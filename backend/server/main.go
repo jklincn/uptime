@@ -42,9 +42,23 @@ type VPNConfig struct {
 	IP   string `json:"ip"`
 }
 
+// SMSConfig represents SMS configuration
+type SMSConfig struct {
+	SignName     string `json:"sign_name"`
+	TemplateCode string `json:"template_code"`
+}
+
+// AliyunConfig represents Aliyun credentials
+type AliyunConfig struct {
+	AccessKeyID     string    `json:"access_key_id"`
+	AccessKeySecret string    `json:"access_key_secret"`
+	SMS             SMSConfig `json:"sms"`
+}
+
 // Config represents the top-level configuration
 type Config struct {
 	VPN     VPNConfig      `json:"vpn"`
+	Aliyun  AliyunConfig   `json:"aliyun"`
 	Users   []UserConfig   `json:"users"`
 	Servers []ServerConfig `json:"servers"`
 }
@@ -63,9 +77,8 @@ type TokenData struct {
 
 // Auth storage
 var (
-	verificationCodes = make(map[string]string)    // phone -> code
-	authTokens        = make(map[string]TokenData) // token -> TokenData
-	authMu            sync.RWMutex
+	authTokens = make(map[string]TokenData) // token -> TokenData
+	authMu     sync.RWMutex
 )
 
 // AuthRequest defines the payload for authentication
@@ -226,16 +239,14 @@ func sendCodeHandler(c *gin.Context) {
 		return
 	}
 
-	// Generate random 6-digit code
-	// For simulation, we'll use a random number but print it to console
-	// In production, this would send an SMS
-	code := fmt.Sprintf("%06d", time.Now().UnixNano()%1000000)
+	// Send SMS via Aliyun
+	if err := SendSmsCode(req.Phone); err != nil {
+		log.Printf("Failed to send SMS to %s: %v", req.Phone, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to send verification code"})
+		return
+	}
 
-	authMu.Lock()
-	verificationCodes[req.Phone] = code
-	authMu.Unlock()
-
-	fmt.Printf(">>> SIMULATED SMS for %s (%s): %s <<<\n", userName, req.Phone, code)
+	fmt.Printf(">>> SMS sent to %s (%s) <<<\n", userName, req.Phone)
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "message": "Verification code sent"})
 }
@@ -247,11 +258,15 @@ func loginHandler(c *gin.Context) {
 		return
 	}
 
-	authMu.RLock()
-	storedCode, exists := verificationCodes[req.Phone]
-	authMu.RUnlock()
+	// Verify code via Aliyun
+	valid, err := CheckSmsCode(req.Phone, req.Code)
+	if err != nil {
+		log.Printf("Verification error for %s: %v", req.Phone, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Verification failed"})
+		return
+	}
 
-	if !exists || storedCode != req.Code {
+	if !valid {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Invalid verification code"})
 		return
 	}
@@ -269,7 +284,6 @@ func loginHandler(c *gin.Context) {
 		Phone:     req.Phone,
 		ExpiresAt: time.Now().Add(7 * 24 * time.Hour), // Valid for 7 days
 	}
-	delete(verificationCodes, req.Phone) // Consume code
 	authMu.Unlock()
 
 	c.JSON(http.StatusOK, gin.H{"success": true, "token": token})

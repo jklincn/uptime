@@ -45,7 +45,7 @@ const sendCode = async () => {
     
     if (res.ok) {
       authStatus.value = 'sent'
-      authMessage.value = '验证码已发送（请查看后端控制台）'
+      authMessage.value = '验证码已发送'
     } else {
       const data = await res.json()
       authStatus.value = 'error'
@@ -178,8 +178,7 @@ onMounted(() => {
       <!-- 登录认证界面 -->
       <div v-else-if="!isAuthenticated" class="auth-container">
         <div class="auth-card">
-          <h2>身份验证</h2>
-          <p class="auth-desc">请验证手机号以访问监控系统</p>
+          <h2>登陆</h2>
           
           <div class="form-group">
             <label>手机号码</label>

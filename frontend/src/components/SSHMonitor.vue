@@ -108,8 +108,8 @@ const confirmAction = async () => {
     if (data.success) {
       // 开始轮询检查状态变化
       const startTime = Date.now()
-      // 根据日志，IPMI 响应可能长达 22秒，因此将超时时间延长至 60秒
-      const timeout = 60000 
+      // 根据日志，IPMI 响应可能长达 22秒，因此将超时时间延长至 30秒
+      const timeout = 30000 
       
       const pollStatus = async () => {
         // 如果弹窗已关闭或操作已取消，停止轮询
