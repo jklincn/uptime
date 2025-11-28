@@ -1,40 +1,57 @@
-<script setup>
+<script setup lang="ts">
 import { ref, onMounted, watch } from 'vue'
 
-const props = defineProps({
-  servers: {
-    type: Array,
-    required: true
-  }
-})
+interface Server {
+  name: string;
+  ip: string;
+  [key: string]: any;
+}
 
-// 存储每个服务器的状态：{ power: 'on'|'off'|'checking'|'unknown', network: 'online'|'offline'|'checking'|'waiting'|'skipped' }
-const serverStates = ref({})
+interface ServerState {
+  power: 'on' | 'off' | 'checking' | 'unknown';
+  network: 'online' | 'offline' | 'checking' | 'waiting' | 'skipped';
+}
+
+interface PendingAction {
+  server: Server;
+  actionType: 'on' | 'off';
+}
+
+const props = defineProps<{
+  servers: Server[];
+}>()
+
+// 存储每个服务器的状态
+const serverStates = ref<Record<string, ServerState>>({})
 
 // 确认对话框状态
 const showConfirmModal = ref(false)
-const pendingAction = ref(null) // { server: object, actionType: 'on'|'off' }
-const actionStatus = ref('confirm') // 'confirm' | 'executing' | 'success' | 'error' | 'timeout'
+const pendingAction = ref<PendingAction | null>(null)
+const actionStatus = ref<'confirm' | 'executing' | 'success' | 'error' | 'timeout'>('confirm')
 const actionMessage = ref('')
 
-const getAuthHeaders = () => {
+const getAuthHeaders = (): Record<string, string> => {
   const token = localStorage.getItem('authToken')
-  return token ? { 'Authorization': token, 'Content-Type': 'application/json' } : { 'Content-Type': 'application/json' }
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (token) {
+    headers['Authorization'] = token
+  }
+  return headers
 }
 
-const checkStatus = async (server) => {
+const checkStatus = async (server: Server) => {
   // 初始化状态
   serverStates.value[server.name] = { power: 'checking', network: 'waiting' }
   
   try {
     // 1. 检查电源状态 (BMC)
-    const powerRes = await fetch('http://localhost:23080/api/ipmi/status', {
+    const powerRes = await fetch('/api/ipmi/status', {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ server_name: server.name })
     })
     
-    let powerStatus = 'unknown'
+    let powerStatus: ServerState['power'] = 'unknown'
     if (powerRes.ok) {
       const data = await powerRes.json()
       powerStatus = data.status
@@ -44,36 +61,51 @@ const checkStatus = async (server) => {
     }
     
     // 更新电源状态
-    serverStates.value[server.name].power = powerStatus
+    const state = serverStates.value[server.name]
+    if (state) {
+      state.power = powerStatus
+    }
     
     // 2. 如果开机 或 无法获取电源状态，继续检查网络连通性
     if (powerStatus === 'on' || powerStatus === 'unknown') {
-      serverStates.value[server.name].network = 'checking'
+      const state = serverStates.value[server.name]
+      if (state) {
+        state.network = 'checking'
+      }
       
-      const netRes = await fetch('http://localhost:23080/api/network/status', {
+      const netRes = await fetch('/api/network/status', {
         method: 'POST',
         headers: getAuthHeaders(),
         body: JSON.stringify({ server_name: server.name })
       })
       
-      let networkStatus = 'offline'
+      let networkStatus: ServerState['network'] = 'offline'
       if (netRes.ok) {
         const data = await netRes.json()
         networkStatus = data.status
       }
       
-      serverStates.value[server.name].network = networkStatus
+      const currentState = serverStates.value[server.name]
+      if (currentState) {
+        currentState.network = networkStatus
+      }
     } else {
-      serverStates.value[server.name].network = 'skipped'
+      const state = serverStates.value[server.name]
+      if (state) {
+        state.network = 'skipped'
+      }
     }
   } catch (error) {
     console.error('Check status failed:', error)
-    serverStates.value[server.name].power = 'unknown'
-    serverStates.value[server.name].network = 'offline'
+    const state = serverStates.value[server.name]
+    if (state) {
+      state.power = 'unknown'
+      state.network = 'offline'
+    }
   }
 }
 
-const togglePower = (server) => {
+const togglePower = (server: Server) => {
   const currentState = serverStates.value[server.name]?.power
   if (!currentState || currentState === 'checking' || currentState === 'unknown') return
 
@@ -91,7 +123,7 @@ const confirmAction = async () => {
   actionStatus.value = 'executing'
 
   try {
-    const response = await fetch('http://localhost:23080/api/ipmi/control', {
+    const response = await fetch('/api/ipmi/control', {
       method: 'POST',
       headers: getAuthHeaders(),
       body: JSON.stringify({ 
@@ -125,7 +157,7 @@ const confirmAction = async () => {
         }
 
         try {
-          const statusRes = await fetch('http://localhost:23080/api/ipmi/status', {
+          const statusRes = await fetch('/api/ipmi/status', {
             method: 'POST',
             headers: getAuthHeaders(),
             body: JSON.stringify({ server_name: server.name })
@@ -139,14 +171,17 @@ const confirmAction = async () => {
               actionMessage.value = `${actionType === 'on' ? '开机' : '关机'}成功`
               
               // 更新本地状态
-              serverStates.value[server.name].power = actionType
-              if (actionType === 'off') {
-                serverStates.value[server.name].network = 'skipped'
-              } else {
-                // 开机后，网络可能还没通，但电源状态已更新
-                serverStates.value[server.name].network = 'waiting'
-                // 触发一次完整检查（包含网络）
-                checkStatus(server)
+              const state = serverStates.value[server.name]
+              if (state) {
+                state.power = actionType
+                if (actionType === 'off') {
+                  state.network = 'skipped'
+                } else {
+                  // 开机后，网络可能还没通，但电源状态已更新
+                  state.network = 'waiting'
+                  // 触发一次完整检查（包含网络）
+                  checkStatus(server)
+                }
               }
               return
             }

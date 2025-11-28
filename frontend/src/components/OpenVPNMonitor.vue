@@ -1,20 +1,20 @@
-<script setup>
-defineProps({
-  server: {
-    type: Object,
-    required: true
-  },
-  status: {
-    type: String,
-    default: 'unknown' // 'checking', 'online', 'offline', 'unknown'
-  }
-})
+<script setup lang="ts">
+interface Server {
+  name: string;
+  ip?: string;
+  [key: string]: any;
+}
+
+defineProps<{
+  server: Server;
+  status?: string; // 'checking', 'online', 'offline', 'unknown'
+}>()
 
 defineEmits(['retry'])
 </script>
 
 <template>
-  <div class="vpn-monitor-card" :class="status">
+  <div class="vpn-monitor-card" :class="status || 'unknown'">
     <div class="info-area">
       <div class="status-row">
         <div class="status-indicator-wrapper">

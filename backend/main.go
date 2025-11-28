@@ -183,8 +183,8 @@ func main() {
 		protected.GET("/vpn/status", vpnStatusHandler)
 	}
 
-	fmt.Println("Server starting on :23080")
-	r.Run(":23080")
+	fmt.Println("Server starting on :18888")
+	r.Run(":18888")
 }
 
 // pingHandler handles health checks
